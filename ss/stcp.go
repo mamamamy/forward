@@ -1,7 +1,6 @@
 package ss
 
 import (
-	"bytes"
 	"crypto/rand"
 	"errors"
 	"forward/util"
@@ -66,16 +65,28 @@ func ListenSTCP(network string, laddr *net.TCPAddr, secret []byte) (*STCPListene
 				/* handshake */
 				sconn.SetDeadline(time.Now().Add(3 * time.Second))
 				defer sconn.SetDeadline(time.Time{})
+				_, err = io.CopyN(io.Discard, sconn, 32)
+				if err != nil {
+					return
+				}
 				buf := make([]byte, 64)
+				rand.Read(buf[32:])
+				_, err = sconn.Write(buf[32:])
+				if err != nil {
+					return
+				}
 				_, err = io.ReadFull(sconn, buf[:32])
 				if err != nil {
 					return
 				}
-				rand.Read(buf[32:])
-				sconn.Write(buf[32:])
-				_, err = io.ReadFull(sconn, buf[:32])
-				if !bytes.Equal(buf[:32], buf[32:]) {
-					err = errors.New("invaild random")
+				for i := 0; i < 32; i++ {
+					if buf[i] != buf[i+32] {
+						err = errors.New("invaild random")
+						return
+					}
+				}
+				_, err = io.CopyN(sconn, rand.Reader, 32)
+				if err != nil {
 					return
 				}
 				/* handshake */
@@ -119,6 +130,10 @@ func DialSTCP(network string, laddr *net.TCPAddr, raddr *net.TCPAddr, secret []b
 	if err != nil {
 		return nil, err
 	}
+	_, err = io.CopyN(io.Discard, sconn, 32)
+	if err != nil {
+		return nil, err
+	}
 	/* handshake */
 	return sconn, nil
 }
@@ -133,6 +148,7 @@ func (s *STCPConn) Read(b []byte) (int, error) {
 }
 
 func (s *STCPConn) Write(b []byte) (int, error) {
-	s.encrypter.XORKeyStream(b, b)
-	return s.Conn.Write(b)
+	dst := make([]byte, len(b))
+	s.encrypter.XORKeyStream(dst, b)
+	return s.Conn.Write(dst)
 }
