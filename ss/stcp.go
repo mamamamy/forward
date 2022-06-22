@@ -1,18 +1,13 @@
 package ss
 
 import (
+	"bytes"
 	"crypto/rand"
-	"encoding/binary"
 	"errors"
 	"forward/util"
 	"io"
 	"net"
 	"time"
-)
-
-const (
-	VERSION              = 0
-	TIMESTAMP_MAX_OFFSET = 60
 )
 
 type STCPListener struct {
@@ -72,26 +67,15 @@ func ListenSTCP(network string, laddr *net.TCPAddr, secret []byte) (*STCPListene
 				sconn.SetDeadline(time.Now().Add(3 * time.Second))
 				defer sconn.SetDeadline(time.Time{})
 				buf := make([]byte, 64)
-				_, err = io.ReadFull(sconn, buf) // 64 random
+				_, err = io.ReadFull(sconn, buf[:32])
 				if err != nil {
 					return
 				}
-				_, err = io.ReadFull(sconn, buf[:9])
-				if err != nil {
-					return
-				}
-				if buf[0] != VERSION {
-					err = errors.New("invalid version")
-					return
-				}
-				timestamp := binary.BigEndian.Uint64(buf[1:9])
-				offset := time.Now().Unix() - int64(timestamp)
-				if util.Math.AbsInt64(offset) > TIMESTAMP_MAX_OFFSET {
-					err = errors.New("invalid timestamp")
-					return
-				}
-				_, err = io.CopyN(sconn, rand.Reader, 64) // 64 random
-				if err != nil {
+				rand.Read(buf[32:])
+				sconn.Write(buf[32:])
+				_, err = io.ReadFull(sconn, buf[:32])
+				if !bytes.Equal(buf[:32], buf[32:]) {
+					err = errors.New("invaild random")
 					return
 				}
 				/* handshake */
@@ -127,13 +111,11 @@ func DialSTCP(network string, laddr *net.TCPAddr, raddr *net.TCPAddr, secret []b
 	/* handshake */
 	sconn.SetDeadline(time.Now().Add(3 * time.Second))
 	defer sconn.SetDeadline(time.Time{})
-	io.CopyN(sconn, rand.Reader, 64) // 64 random
-	sconn.Write([]byte{VERSION})     // 1 version
-	timestamp := make([]byte, 8)     // 8 timestamp
-	binary.BigEndian.PutUint64(timestamp, uint64(time.Now().Unix()))
-	sconn.Write(timestamp)
-	buf := make([]byte, 64)
-	_, err = io.ReadFull(sconn, buf) // 64 random from server
+	_, err = io.CopyN(sconn, rand.Reader, 32)
+	if err != nil {
+		return nil, err
+	}
+	_, err = io.CopyN(sconn, sconn, 32)
 	if err != nil {
 		return nil, err
 	}
